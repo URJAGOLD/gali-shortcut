@@ -24,7 +24,8 @@
   .toggle{display:flex;gap:8px}.toggle button{background:#1e293b;color:#e2e8f0}.toggle button.on{background:#38bdf8;color:#082f49}
   input[type=range]{width:100%}
   .card{background:#0b1220;border:1px solid #334155;border-radius:10px;padding:10px;margin-top:10px;cursor:pointer}
-  .card.sel{border-color:#22c55e}
+  .card.sel{border-color:#22c55e;border-width:2px}
+  .card.hero{border-color:#22c55e;background:#052e16}
   .card h3{margin:0 0 4px;font-size:15px}.card small{color:#94a3b8}
   .badge{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;font-weight:700}
   .b-main{background:#334155;color:#e2e8f0}.b-cut{background:#14532d;color:#86efac}.b-alt{background:#3b0764;color:#d8b4fe}
@@ -33,20 +34,21 @@
   .ok{font-size:12px;color:#86efac}
   #map{height:100%;min-height:420px}
   .err{color:#fca5a5;font-size:13px;margin-top:8px}
+  #status{font-size:13px;color:#38bdf8;margin-top:8px;min-height:18px}
 </style>
 </head>
 <body>
 <header>
-  <h1>🛣️ Gali Shortcut — Free Route Finder</h1>
-  <p>100% FREE stack: OpenStreetMap + OSRM + Valhalla (FOSSGIS public servers). No Google API, no card, no API key.</p>
+  <h1>🛣️ Gali Shortcut — Free Route Finder <small style="color:#22c55e">v2</small></h1>
+  <p>100% FREE: OpenStreetMap + OSRM + Valhalla. No Google, no card, no API key. <b style="color:#86efac">Hara mota route = gali shortcut</b>, patli grey dash line = main road (sirf compare ke liye).</p>
 </header>
 <div class="wrap">
   <div class="panel">
     <label>कहाँ से (From)</label>
-    <input type="text" id="from" placeholder="e.g. Noida Sector 62" autocomplete="off">
+    <input type="text" id="from" placeholder="e.g. Connaught Place, Delhi" autocomplete="off">
     <div class="suggest" id="fromSug"></div>
     <label>कहाँ तक (To)</label>
-    <input type="text" id="to" placeholder="e.g. Connaught Place, Delhi" autocomplete="off">
+    <input type="text" id="to" placeholder="e.g. Lajpat Nagar, Delhi" autocomplete="off">
     <div class="suggest" id="toSug"></div>
     <div class="row" style="margin-top:10px">
       <button class="sec" id="locBtn" type="button">📍 Meri Location (From)</button>
@@ -59,12 +61,13 @@
     </div>
     <label>Main road par jam kitna hai? (तुम्हारा अंदाज़ा — live traffic free me nahi milta)</label>
     <input type="range" id="jam" min="0" max="3" step="1" value="0">
-    <div class="ok" id="jamLabel">0 = Koi jam nahi (asli static time hi dikhega)</div>
-    <div style="margin-top:14px"><button id="go" type="button">Shortcut Route Dhundho →</button></div>
+    <div class="ok" id="jamLabel">0 = Koi jam nahi</div>
+    <div style="margin-top:14px"><button id="go" type="button">🚀 Gali Shortcut Dhundho →</button></div>
+    <div id="status"></div>
     <div class="err" id="err"></div>
     <div id="results"></div>
     <ol id="steps"></ol>
-    <div class="note">⚠️ <b>Sach baat:</b> Free stack me Google wala <b>live traffic nahi</b> hota. Time jo dikhta hai wo sadak ki speed limit / lambai se hisaab hai. Isliye upar Jam slider diya hai — main road par jam set karoge to Main Route ka andazit time badh jayega aur Shortcut se compare saaf dikhega. Ye andaza hai, live data nahi.<br><br>Public free servers ki limit: ~1 request/second, halka personal use hi. Public launch karna ho to yehi engines apne server par free self-host honge (sirf server ka kharcha, per-route paisa zero).</div>
+    <div class="note">⚠️ <b>v2 me kya badla:</b> Pehle sirf badi-sadak band karne ki setting thi — kai routes par wo kaam hi nahi karti thi aur route main road wala hi reh jata tha. Ab app <b>via-point baiting</b> bhi karti hai: main route ke side me 500-600m andar mohalle ki sadak par point daal kar route ko zabardasti galiyon se ghumati hai, phir sabse alag aur sahi shortcut chun kar <b>hara mota</b> dikhati hai.<br><br>Free stack me Google wala <b>live traffic nahi</b> hota — time sadak ki lambai/speed se hisaab hai. Jam slider tumhara andaza hai, live data nahi. Public free servers: ~1 request/second, halka personal use hi.</div>
     <p class="ok">Data © OpenStreetMap contributors (ODbL) · Routing: OSRM &amp; Valhalla (FOSSGIS)</p>
   </div>
   <div id="map"></div>
@@ -73,11 +76,12 @@
 <script>
 const map = L.map('map').setView([28.6139,77.2090], 11);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'}).addTo(map);
-let vehicle='car', fromPt=null, toPt=null, layers=[], routes=[];
+let vehicle='car', fromPt=null, toPt=null, layers=[], routes=[], heroRoute=null;
 const $=id=>document.getElementById(id);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const hav=(a,b)=>{const R=6371000,t=Math.PI/180;const dLa=(b[0]-a[0])*t,dLo=(b[1]-a[1])*t;const h=Math.sin(dLa/2)**2+Math.cos(a[0]*t)*Math.cos(b[0]*t)*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(h));};
 
-// ---------- Geocoding: Nominatim (free, no key, max 1 req/sec policy) ----------
+// ---------- Geocoding: Nominatim (free, no key) ----------
 let geoTimer={};
 function attachSearch(inputId,sugId,setter){
   $(inputId).addEventListener('input',e=>{
@@ -97,7 +101,7 @@ function attachSearch(inputId,sugId,setter){
           sug.appendChild(div);
         });
         sug.style.display=data.length?'block':'none';
-      }catch(err){ /* silent */ }
+      }catch(err){}
     },450);
   });
 }
@@ -119,7 +123,7 @@ $('locBtn').onclick=()=>{
 $('swapBtn').onclick=()=>{ const t=fromPt; fromPt=toPt; toPt=t; const tv=$('from').value; $('from').value=$('to').value; $('to').value=tv; dropPin(); };
 $('vCar').onclick=()=>{vehicle='car';$('vCar').classList.add('on');$('vBike').classList.remove('on');};
 $('vBike').onclick=()=>{vehicle='bike';$('vBike').classList.add('on');$('vCar').classList.remove('on');};
-const jamNames=['0 = Koi jam nahi (asli static time hi dikhega)','1 = Halka jam — main road andazan +30% slow','2 = Medium jam — main road andazan +70% slow','3 = Bhari jam — main road andazan +120% slow (shortcut aksar jeet-ta hai)'];
+const jamNames=['0 = Koi jam nahi','1 = Halka jam — main road andazan +30% slow','2 = Medium jam — main road andazan +70% slow','3 = Bhari jam — main road andazan +120% slow (shortcut aksar jeet-ta hai)'];
 $('jam').oninput=e=>{ $('jamLabel').textContent=jamNames[+e.target.value]; if(routes.length) render(); };
 
 // ---------- Valhalla polyline6 decoder ----------
@@ -137,18 +141,26 @@ function decodePolyline(str,precision=6){
   return coords;
 }
 
-// ---------- Routing calls (free public servers, spaced ~1/sec) ----------
-async function osrmRoute(){
-  const url=`https://router.project-osrm.org/route/v1/driving/${fromPt.lon},${fromPt.lat};${toPt.lon},${toPt.lat}?overview=full&geometries=geojson&steps=true&alternatives=1`;
+// ---------- Routing ----------
+async function osrmBaseline(){
+  const url=`https://router.project-osrm.org/route/v1/driving/${fromPt.lon},${fromPt.lat};${toPt.lon},${toPt.lat}?overview=full&geometries=geojson&steps=true`;
   const r=await fetch(url); const d=await r.json();
   if(d.code!=='Ok'||!d.routes.length) return null;
   const rt=d.routes[0];
   const streets=[]; rt.legs[0].steps.forEach(s=>{ if(s.name&&!streets.includes(s.name)) streets.push(s.name); });
   const steps=rt.legs[0].steps.filter(s=>s.maneuver&&s.maneuver.instruction).map(s=>s.maneuver.instruction+(s.name?(' — '+s.name):''));
-  return {kind:'main',label:'Main Road Route',engine:'OSRM (fastest, badi sadkein)',mins:rt.duration/60,km:rt.distance/1000,coords:rt.geometry.coordinates.map(c=>[c[1],c[0]]),streets:streets.slice(0,8),steps};
+  return {kind:'main',label:'Main Road (Google-jaisa)',engine:'OSRM fastest — sirf compare ke liye',mins:rt.duration/60,km:rt.distance/1000,coords:rt.geometry.coordinates.map(c=>[c[1],c[0]]),streets:streets.slice(0,8),steps};
 }
-async function valhallaRoute(costing,opts,kind,label,engine){
-  const body={locations:[{lat:fromPt.lat,lon:fromPt.lon},{lat:toPt.lat,lon:toPt.lon}],costing,units:'km'};
+async function osrmNearest(lat,lon){
+  try{
+    const r=await fetch(`https://router.project-osrm.org/nearest/v1/driving/${lon},${lat}?number=1`);
+    const d=await r.json();
+    if(d.code==='Ok'&&d.waypoints.length) return {lat:d.waypoints[0].location[1],lon:d.waypoints[0].location[0]};
+  }catch(e){}
+  return null;
+}
+async function valhalla(locs,costing,opts){
+  const body={locations:locs,costing,units:'km'};
   if(opts) body.costing_options={[costing]:opts};
   const r=await fetch('https://valhalla1.openstreetmap.de/route',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const d=await r.json();
@@ -158,57 +170,119 @@ async function valhallaRoute(costing,opts,kind,label,engine){
     coords=coords.concat(decodePolyline(leg.shape,6));
     leg.maneuvers.forEach(m=>{ (m.street_names||[]).forEach(s=>{if(!streets.includes(s))streets.push(s);}); if(m.instruction) steps.push(m.instruction); });
   });
-  return {kind,label,engine,mins:d.trip.summary.time/60,km:d.trip.summary.length,coords,streets:streets.slice(0,8),steps};
+  return {mins:d.trip.summary.time/60,km:d.trip.summary.length,coords,streets:streets.slice(0,9),steps};
+}
+// How different is candidate from baseline? % of sampled points >75m away from baseline line
+function diffScore(coords,baseCoords){
+  const baseSample=baseCoords.filter((_,i)=>i%4===0);
+  let far=0,total=0;
+  coords.forEach((c,i)=>{ if(i%4!==0) return; total++;
+    let best=1e12; for(const b of baseSample){ const dd=hav(c,b); if(dd<best) best=dd; }
+    if(best>75) far++; });
+  return total? far/total : 0;
+}
+function offsetPt(base,nxt,side,distM){
+  const dlat=nxt[0]-base[0], dlon=nxt[1]-base[1];
+  const norm=Math.hypot(dlat,dlon)||1;
+  const plat=-dlon/norm, plon=dlat/norm;
+  const lat=base[0]+plat*side*(distM/111000);
+  const lon=base[1]+plon*side*(distM/(111000*Math.cos(base[0]*Math.PI/180)));
+  return {lat,lon};
 }
 
 $('go').onclick=async()=>{
-  $('err').textContent=''; $('results').innerHTML=''; $('steps').innerHTML='';
+  $('err').textContent=''; $('results').innerHTML=''; $('steps').innerHTML=''; routes=[]; heroRoute=null;
   if(!fromPt||!toPt){ $('err').textContent='Pehle From aur To dono jagah list se select karo (type karke neeche aayi list par click karo).'; return; }
-  $('go').disabled=true; $('go').textContent='Route dhundh raha hai… (free server, thoda time lagega)';
-  routes=[]; layers.forEach(l=>map.removeLayer(l)); layers=[];
+  $('go').disabled=true;
+  layers.forEach(l=>map.removeLayer(l)); layers=[];
+  const costing = vehicle==='bike' ? 'motor_scooter' : 'auto';
+  const noBig = {use_highways:0.0,use_primary:0.0,use_tolls:0.0};
   try{
-    const costing = vehicle==='bike' ? 'motor_scooter' : 'auto';
-    const r1=await osrmRoute(); if(r1) routes.push(r1);
+    $('status').textContent='1/4 · Main road route nikaal raha hai…';
+    const base=await osrmBaseline(); if(!base) throw new Error('Main route nahi mila — jagah check karo.');
+    routes.push(base);
     await sleep(1100);
-    const r2=await valhallaRoute(costing,null,'alt','Standard Route','Valhalla '+costing); if(r2) routes.push(r2);
+    $('status').textContent='2/4 · Valhalla standard route (same engine, sahi compare)…';
+    const std=await valhalla([{lat:fromPt.lat,lon:fromPt.lon},{lat:toPt.lat,lon:toPt.lon}],costing,null);
     await sleep(1100);
-    const r3=await valhallaRoute(costing,{use_highways:0.0,use_primary:0.0,use_tolls:0.0},'cut','🚀 Gali Shortcut Route','Valhalla '+costing+' · highways/primary roads OFF');
-    if(r3 && (!r2 || Math.abs(r3.km-r2.km)>0.15 || Math.abs(r3.mins-r2.mins)>0.5)) routes.push(r3);
-    if(!routes.length) throw new Error('Koi route nahi mila — jagah check karo.');
+    $('status').textContent='3/4 · Badi sadkein band karke shortcut try…';
+    const cut1=await valhalla([{lat:fromPt.lat,lon:fromPt.lon},{lat:toPt.lat,lon:toPt.lon}],costing,noBig);
+    const cand=[];
+    if(cut1) cand.push({...cut1,kind:'cut',label:'Gali Shortcut (badi sadkein OFF)',engine:'Valhalla · highways/primary OFF',diff:diffScore(cut1.coords,base.coords)});
+    // ---- Via-point baiting: force route through mohalla roads beside the main route ----
+    $('status').textContent='4/4 · Mohalle ke andar via-point daal kar asli shortcut bana raha hai… (thoda time lagega)';
+    const geom=base.coords;
+    const at=f=>geom[Math.floor((geom.length-1)*f)];
+    for(const side of [1,-1]){
+      const vias=[];
+      for(const f of [0.35,0.65]){
+        const p=at(f), n=at(Math.min(f+0.05,1));
+        const off=offsetPt(p,n,side,575);
+        const snap=await osrmNearest(off.lat,off.lon);
+        if(snap) vias.push(snap);
+        await sleep(350);
+      }
+      if(vias.length===2){
+        await sleep(800);
+        const locs=[{lat:fromPt.lat,lon:fromPt.lon,type:'break'},...vias.map(v=>({lat:v.lat,lon:v.lon,type:'via'})),{lat:toPt.lat,lon:toPt.lon,type:'break'}];
+        try{
+          const vc=await valhalla(locs,costing,noBig);
+          if(vc) cand.push({...vc,kind:'cut',label:'🚀 Asli Gali Shortcut (mohalle se)',engine:'Valhalla via-point baiting · galiyon se zabardasti',diff:diffScore(vc.coords,base.coords)});
+        }catch(e){}
+      }
+    }
+    // Pick hero: most different from main road, but not absurdly long
+    const sane=cand.filter(c=>c.km<=base.km*1.4 && c.diff>=0.08);
+    sane.sort((a,b)=>b.diff-a.diff);
+    if(sane.length){ heroRoute=sane[0]; heroRoute.hero=true; routes.splice(1,0,heroRoute);
+      const other=sane[1]; if(other&&other!==heroRoute) routes.push(other);
+      const c1=cand.find(c=>c.label.startsWith('Gali Shortcut (badi')); if(c1&&!routes.includes(c1)&&c1.diff>=0.08) routes.push(c1);
+    }
+    if(std) routes.push({...std,kind:'alt',label:'Standard Route',engine:'Valhalla standard (badi sadkein allowed)',diff:diffScore(std.coords,base.coords)});
+    $('status').textContent= heroRoute ? '✅ Shortcut mila! Hara mota route hi tumhara gali shortcut hai.' : '⚠️ Is route par koi alag gali shortcut nahi mila — is hisse me main road ke alawa dusra raasta ya to hai nahi, ya bahut lamba padta hai. Neeche sirf main/standard route dikh raha hai.';
     render();
-  }catch(e){ $('err').textContent='Error: '+e.message+' — free public server busy ho sakta hai, 1 minute baad phir try karo.'; }
-  $('go').disabled=false; $('go').textContent='Shortcut Route Dhundho →';
+  }catch(e){ $('err').textContent='Error: '+e.message+' — free public server busy ho sakta hai, 1 minute baad phir try karo.'; $('status').textContent=''; }
+  $('go').disabled=false;
 };
 
 function adjustedMins(rt){
   const jam=+$('jam').value; if(!jam) return rt.mins;
   const factor=[0,0.30,0.70,1.20][jam];
-  // Andaz: main/standard route jam se sabse zyada slow, shortcut sabse kam (chhoti sadko par bheed kam)
-  const hit = rt.kind==='main' ? factor : rt.kind==='alt' ? factor*0.6 : factor*0.25;
+  const hit = rt.kind==='main'||rt.kind==='alt' ? factor : factor*0.25;
   return rt.mins*(1+hit);
 }
 function render(){
   layers.forEach(l=>map.removeLayer(l)); layers=[];
-  const colors={main:'#94a3b8',alt:'#a78bfa',cut:'#22c55e'};
-  const sorted=[...routes].sort((a,b)=>adjustedMins(a)-adjustedMins(b));
-  const best=sorted[0];
+  // Draw main + standard first (thin), hero last (thick green with white casing) so shortcut is what the eye sees
+  const order=[...routes].sort((a,b)=>(a.hero?1:0)-(b.hero?1:0));
+  order.forEach(rt=>{
+    if(rt.hero){
+      layers.push(L.polyline(rt.coords,{color:'#ffffff',weight:11,opacity:.85}).addTo(map));
+      layers.push(L.polyline(rt.coords,{color:'#22c55e',weight:7,opacity:1}).addTo(map));
+    } else if(rt.kind==='main'){
+      layers.push(L.polyline(rt.coords,{color:'#9ca3af',weight:3,opacity:.8,dashArray:'7 7'}).addTo(map));
+    } else if(rt.kind==='cut'){
+      layers.push(L.polyline(rt.coords,{color:'#4ade80',weight:4,opacity:.8}).addTo(map));
+    } else {
+      layers.push(L.polyline(rt.coords,{color:'#a78bfa',weight:3,opacity:.7}).addTo(map));
+    }
+  });
   $('results').innerHTML='';
-  routes.forEach((rt,i)=>{
-    const isBest = rt===best && +$('jam').value>0;
-    const line=L.polyline(rt.coords,{color:colors[rt.kind],weight:rt.kind==='cut'?6:4,opacity:.9}).addTo(map); layers.push(line);
-    const card=document.createElement('div'); card.className='card'+(i===0?' sel':'');
-    card.innerHTML=`<h3><span class="badge ${rt.kind==='cut'?'b-cut':rt.kind==='alt'?'b-alt':'b-main'}">${rt.label}</span> ${isBest?'🏆 Jam me sabse tez (andaz)':''}</h3>
-      <b>${adjustedMins(rt).toFixed(0)} min</b> ${+$('jam').value?`<small>(bina jam: ${rt.mins.toFixed(0)} min · andazit)</small>`:'<small>(bina live traffic)</small>'} · ${rt.km.toFixed(1)} km<br>
+  const selDefault = heroRoute || routes[0];
+  routes.forEach(rt=>{
+    const card=document.createElement('div'); card.className='card'+(rt===selDefault?' sel':'')+(rt.hero?' hero':'');
+    card.innerHTML=`<h3><span class="badge ${rt.kind==='cut'?'b-cut':rt.kind==='alt'?'b-alt':'b-main'}">${rt.label}</span>${rt.hero?' 🏆 Yahi wala use karo':''}</h3>
+      <b>${adjustedMins(rt).toFixed(0)} min</b> ${+$('jam').value&&rt.kind!=='cut'?'<small>(jam andaz ke saath)</small>':''} · ${rt.km.toFixed(1)} km${rt.diff!==undefined?` · main road se <b>${Math.round(rt.diff*100)}% alag</b>`:''}<br>
       <small>${rt.engine}</small><br><small>Raasta: ${rt.streets.join(' → ')||'—'}</small>`;
     card.onclick=()=>{ document.querySelectorAll('.card').forEach(c=>c.classList.remove('sel')); card.classList.add('sel');
       $('steps').innerHTML=rt.steps.map(s=>`<li>${s}</li>`).join(''); };
     $('results').appendChild(card);
-    if(i===0) $('steps').innerHTML=rt.steps.map(s=>`<li>${s}</li>`).join('');
+    if(rt===selDefault) $('steps').innerHTML=rt.steps.map(s=>`<li>${s}</li>`).join('');
   });
   if(routes.length) map.fitBounds(L.latLngBounds(routes.flatMap(r=>r.coords)),{padding:[30,30]});
-  dropPinKeep();
+  pins.forEach(p=>map.removeLayer(p)); pins=[];
+  [fromPt,toPt].forEach(p=>{ if(p) pins.push(L.marker([p.lat,p.lon]).addTo(map)); });
 }
-function dropPinKeep(){ pins.forEach(p=>map.removeLayer(p)); pins=[]; [fromPt,toPt].forEach(p=>{ if(p) pins.push(L.marker([p.lat,p.lon]).addTo(map)); }); }
 </script>
 </body>
 </html>
