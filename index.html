@@ -39,7 +39,7 @@
 </head>
 <body>
 <header>
-  <h1>🛣️ Gali Shortcut — Free Route Finder <small style="color:#22c55e">v2</small></h1>
+  <h1>🛣️ Gali Shortcut — Free Route Finder <small style="color:#22c55e">v3</small></h1>
   <p>100% FREE: OpenStreetMap + OSRM + Valhalla. No Google, no card, no API key. <b style="color:#86efac">Hara mota route = gali shortcut</b>, patli grey dash line = main road (sirf compare ke liye).</p>
 </header>
 <div class="wrap">
@@ -65,9 +65,11 @@
     <div style="margin-top:14px"><button id="go" type="button">🚀 Gali Shortcut Dhundho →</button></div>
     <div id="status"></div>
     <div class="err" id="err"></div>
+    <div id="stats" class="ok" style="margin-top:6px"></div>
+    <div id="removedList" style="font-size:12px;color:#94a3b8;margin-top:4px;line-height:1.6"></div>
     <div id="results"></div>
     <ol id="steps"></ol>
-    <div class="note">⚠️ <b>v2 me kya badla:</b> Pehle sirf badi-sadak band karne ki setting thi — kai routes par wo kaam hi nahi karti thi aur route main road wala hi reh jata tha. Ab app <b>via-point baiting</b> bhi karti hai: main route ke side me 500-600m andar mohalle ki sadak par point daal kar route ko zabardasti galiyon se ghumati hai, phir sabse alag aur sahi shortcut chun kar <b>hara mota</b> dikhati hai.<br><br>Free stack me Google wala <b>live traffic nahi</b> hota — time sadak ki lambai/speed se hisaab hai. Jam slider tumhara andaza hai, live data nahi. Public free servers: ~1 request/second, halka personal use hi.</div>
+    <div class="note">⚠️ <b>v3 ka tareeka (tumhare kehne par):</b> App ab main route ke <b>dono taraf (LEFT aur RIGHT)</b> ki galiyan ek-ek karke try karti hai — 400m aur 800m andar tak via-point daal kar. Jo route <b>block / bahut lamba / target se ulta jaata / main road jaisa hi</b> hota hai, use <b>hata (remove)</b> deti hai — hataye hue routes ki list wajah ke saath neeche dikhti hai. Jo bachte hain unme se target ki taraf sabse saaf badhne wala <b>hara mota hero route</b> banta hai, aur LEFT ka best aur RIGHT ka best alag card me bhi milta hai.<br><br>Free stack me Google wala <b>live traffic nahi</b> hota — time sadak ki lambai/speed se hisaab hai. Jam slider tumhara andaza hai, live data nahi. Public free servers: ~1 request/second, isliye saare try karne me ~40-60 second lag sakte hain.</div>
     <p class="ok">Data © OpenStreetMap contributors (ODbL) · Routing: OSRM &amp; Valhalla (FOSSGIS)</p>
   </div>
   <div id="map"></div>
@@ -191,7 +193,7 @@ function offsetPt(base,nxt,side,distM){
 }
 
 $('go').onclick=async()=>{
-  $('err').textContent=''; $('results').innerHTML=''; $('steps').innerHTML=''; routes=[]; heroRoute=null;
+  $('err').textContent=''; $('results').innerHTML=''; $('steps').innerHTML=''; $('stats').textContent=''; $('removedList').innerHTML=''; routes=[]; heroRoute=null;
   if(!fromPt||!toPt){ $('err').textContent='Pehle From aur To dono jagah list se select karo (type karke neeche aayi list par click karo).'; return; }
   $('go').disabled=true;
   layers.forEach(l=>map.removeLayer(l)); layers=[];
@@ -205,39 +207,76 @@ $('go').onclick=async()=>{
     $('status').textContent='2/4 · Valhalla standard route (same engine, sahi compare)…';
     const std=await valhalla([{lat:fromPt.lat,lon:fromPt.lon},{lat:toPt.lat,lon:toPt.lon}],costing,null);
     await sleep(1100);
-    $('status').textContent='3/4 · Badi sadkein band karke shortcut try…';
-    const cut1=await valhalla([{lat:fromPt.lat,lon:fromPt.lon},{lat:toPt.lat,lon:toPt.lon}],costing,noBig);
-    const cand=[];
-    if(cut1) cand.push({...cut1,kind:'cut',label:'Gali Shortcut (badi sadkein OFF)',engine:'Valhalla · highways/primary OFF',diff:diffScore(cut1.coords,base.coords)});
-    // ---- Via-point baiting: force route through mohalla roads beside the main route ----
-    $('status').textContent='4/4 · Mohalle ke andar via-point daal kar asli shortcut bana raha hai… (thoda time lagega)';
+    // ---- v3: Try EVERY gali — left + right, 400m/800m andar — block/lamba/ulta hata do, target ki taraf badho ----
     const geom=base.coords;
     const at=f=>geom[Math.floor((geom.length-1)*f)];
+    const snapCache={};
+    async function snapCached(pt){
+      const k=pt.lat.toFixed(4)+','+pt.lon.toFixed(4);
+      if(snapCache[k]) return snapCache[k];
+      const s=await osrmNearest(pt.lat,pt.lon); snapCache[k]=s; await sleep(300); return s;
+    }
+    function backwardCount(coords){
+      const n=coords.length; let bad=0, prev=null;
+      for(let i=0;i<10;i++){ const p=coords[Math.floor((n-1)*i/9)]; const dd=hav(p,[toPt.lat,toPt.lon]);
+        if(prev!==null && dd>prev+150) bad++; prev=dd; }
+      return bad;
+    }
+    const cand=[], removed=[]; let tried=0;
+    async function tryRoute(name,locs,opts,side){
+      tried++;
+      $('status').textContent=`Gali try ${tried}/7 · ${name} try ho raha hai… (jo block/lamba/ulta hoga, hata dunga)`;
+      await sleep(900);
+      let r=null;
+      try{ r=await valhalla(locs,costing,opts); }catch(e){ r=null; }
+      if(!r){ removed.push(name+' — route nahi mila (block)'); return; }
+      r.name=name; r.side=side; r.diff=diffScore(r.coords,base.coords); r.back=backwardCount(r.coords);
+      if(r.km>base.km*1.45){ removed.push(`${name} — bahut lamba (${r.km.toFixed(1)} km), hata diya`); return; }
+      if(r.back>2){ removed.push(name+' — target se ulta ja raha tha, hata diya'); return; }
+      if(r.diff<0.10){ removed.push(name+' — main road jaisa hi tha, hata diya'); return; }
+      r.score=r.diff*100-Math.max(0,(r.km/base.km-1))*30;
+      cand.push(r);
+    }
+    $('status').textContent='3/4 · Badi sadkein band wala shortcut try…';
+    await tryRoute('Badi sadkein OFF',[{lat:fromPt.lat,lon:fromPt.lon},{lat:toPt.lat,lon:toPt.lon}],noBig,0);
     for(const side of [1,-1]){
-      const vias=[];
-      for(const f of [0.35,0.65]){
-        const p=at(f), n=at(Math.min(f+0.05,1));
-        const off=offsetPt(p,n,side,575);
-        const snap=await osrmNearest(off.lat,off.lon);
-        if(snap) vias.push(snap);
-        await sleep(350);
+      const sname= side===1 ? 'LEFT' : 'RIGHT';
+      for(const dist of [400,800]){
+        const vias=[];
+        for(const f of [0.3,0.6]){
+          const p=at(f), n=at(Math.min(f+0.05,1));
+          const s=await snapCached(offsetPt(p,n,side,dist));
+          if(s) vias.push(s);
+        }
+        if(vias.length===2){
+          const locs=[{lat:fromPt.lat,lon:fromPt.lon,type:'break'},...vias.map(v=>({lat:v.lat,lon:v.lon,type:'via'})),{lat:toPt.lat,lon:toPt.lon,type:'break'}];
+          await tryRoute(`${sname} gali · ${dist}m andar`,locs,noBig,side);
+        } else removed.push(`${sname} gali · ${dist}m andar — andar sadak hi nahi mili (block)`);
       }
-      if(vias.length===2){
-        await sleep(800);
-        const locs=[{lat:fromPt.lat,lon:fromPt.lon,type:'break'},...vias.map(v=>({lat:v.lat,lon:v.lon,type:'via'})),{lat:toPt.lat,lon:toPt.lon,type:'break'}];
-        try{
-          const vc=await valhalla(locs,costing,noBig);
-          if(vc) cand.push({...vc,kind:'cut',label:'🚀 Asli Gali Shortcut (mohalle se)',engine:'Valhalla via-point baiting · galiyon se zabardasti',diff:diffScore(vc.coords,base.coords)});
-        }catch(e){}
+      const v1=await snapCached(offsetPt(at(0.5),at(0.55),side,600));
+      if(v1){
+        const locs=[{lat:fromPt.lat,lon:fromPt.lon,type:'break'},{lat:v1.lat,lon:v1.lon,type:'via'},{lat:toPt.lat,lon:toPt.lon,type:'break'}];
+        await tryRoute(`${sname} gali · beech se 600m`,locs,noBig,side);
       }
     }
-    // Pick hero: most different from main road, but not absurdly long
-    const sane=cand.filter(c=>c.km<=base.km*1.4 && c.diff>=0.08);
-    sane.sort((a,b)=>b.diff-a.diff);
-    if(sane.length){ heroRoute=sane[0]; heroRoute.hero=true; routes.splice(1,0,heroRoute);
-      const other=sane[1]; if(other&&other!==heroRoute) routes.push(other);
-      const c1=cand.find(c=>c.label.startsWith('Gali Shortcut (badi')); if(c1&&!routes.includes(c1)&&c1.diff>=0.08) routes.push(c1);
+    $('status').textContent='4/4 · Bache hue routes me se best chun raha hai…';
+    cand.sort((a,b)=>b.score-a.score);
+    // dedupe near-identical routes
+    const uniq=[];
+    for(const c of cand){ if(!uniq.some(u=>diffScore(c.coords,u.coords)<0.05)) uniq.push(c); }
+    if(uniq.length){
+      heroRoute=uniq[0]; heroRoute.hero=true; heroRoute.kind='cut';
+      heroRoute.label='🚀 Asli Gali Shortcut ('+(heroRoute.side===1?'LEFT':heroRoute.side===-1?'RIGHT':'mohalle')+' se)';
+      heroRoute.engine='Sab galiyan try karke chuna gaya · score '+heroRoute.score.toFixed(0);
+      routes.splice(1,0,heroRoute);
+      const bestL=uniq.find(c=>c.side===1&&c!==heroRoute), bestR=uniq.find(c=>c.side===-1&&c!==heroRoute);
+      if(bestL) routes.push({...bestL,kind:'cut',label:'⬅️ LEFT ka best gali route',engine:'Via-point baiting · '+bestL.name});
+      if(bestR) routes.push({...bestR,kind:'cut',label:'➡️ RIGHT ka best gali route',engine:'Via-point baiting · '+bestR.name});
+      const badi=uniq.find(c=>c.side===0&&c!==heroRoute);
+      if(badi) routes.push({...badi,kind:'cut',label:'Gali Shortcut (badi sadkein OFF)',engine:'Valhalla · highways/primary OFF'});
     }
+    $('stats').textContent=`🔍 Kul ${tried} gali routes try kiye · ❌ ${removed.length} hata diye · ✅ ${uniq.length} sahi bache`;
+    $('removedList').innerHTML=removed.length? ('<b>Hataye hue routes:</b><br>'+removed.map(r=>'❌ '+r).join('<br>')) : '';
     if(std) routes.push({...std,kind:'alt',label:'Standard Route',engine:'Valhalla standard (badi sadkein allowed)',diff:diffScore(std.coords,base.coords)});
     $('status').textContent= heroRoute ? '✅ Shortcut mila! Hara mota route hi tumhara gali shortcut hai.' : '⚠️ Is route par koi alag gali shortcut nahi mila — is hisse me main road ke alawa dusra raasta ya to hai nahi, ya bahut lamba padta hai. Neeche sirf main/standard route dikh raha hai.';
     render();
